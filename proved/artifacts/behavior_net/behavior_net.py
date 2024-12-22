@@ -26,43 +26,61 @@ class BehaviorNet(PetriNet):
         petri_utils.add_arc_from_to(sink_trans, sink_place, self)
 
         # Creating transitions for each node in the graph
-        node_trans = {}
-        for i, node in enumerate(behavior_graph.nodes):
-            transition_set = {PetriNet.Transition('t' + str(i) + '_' + str(activity_label), activity_label) for activity_label in node[1]}
-            node_trans[id(node)] = transition_set
-            for transition in transition_set:
-                self.transitions.add(transition)
+        node_trans = {}  
+        self.uncertainty_dict = {}
+        for node, attrs in behavior_graph.nodes(data=True):
+            node_id, labels = node
+            #TODO add a xsd default key
+            node_dict = attrs.get('u_dict', {})
+            transition_set = set()
 
-        for i, node_from in enumerate(behavior_graph.nodes):
-            # Each activity that can start the trace have to be connected through an AND-split to the starting invisible transition
-            if not next(behavior_graph.predecessors(node_from), None):
-                place_from_source = PetriNet.Place('source_to_' + str(id(node_from)))
-                for transition in node_trans[id(node_from)]:
-                    self.places.add(place_from_source)
-                    petri_utils.add_arc_from_to(place_from_source, transition, self)
+            for label in labels:
+                transition_label = f"t{node_id}_{label if label is not None else 'None'}"
+                transition = PetriNet.Transition(transition_label, label)
+                self.transitions.add(transition)
+                transition_set.add(transition)
+                # Add uncertainty info to events
+                if label is None:
+                    # Special handling for missing events
+                    self.uncertainty_dict[transition] = node_dict.get('None', {})
+                else:
+                    self.uncertainty_dict[transition] = node_dict.get(label, {})
+
+            node_trans[node_id] = transition_set
+
+        for node_from_id, node_from_labels in behavior_graph.nodes:
+            transitions_from = node_trans[node_from_id]
+           
+           # Each activity that can start the trace have to be connected through an AND-split to the starting invisible transition
+            if not list(behavior_graph.predecessors((node_from_id, node_from_labels))):
+                place_from_source = PetriNet.Place(f'source_to_{node_from_id}')
+                self.places.add(place_from_source)
                 petri_utils.add_arc_from_to(source_trans, place_from_source, self)
+                for transition in transitions_from:
+                    petri_utils.add_arc_from_to(place_from_source, transition, self)
 
             # Every arc in the behavior graph is translated to a place in the behavior net, describing the precedence relationship between nodes
             # For each successor of the current node, all the transitions of the current node are connected to all the transitions in the successor through a place
-            for node_to in behavior_graph.successors(node_from):
-                place = PetriNet.Place(str(id(node_from)) + str(id(node_to)))
-                self.places.add(place)
-                for transition in node_trans[id(node_from)]:
-                    petri_utils.add_arc_from_to(transition, place, self)
-                for transition in node_trans[id(node_to)]:
-                    petri_utils.add_arc_from_to(place, transition, self)
+            for node_to_id, node_to_labels in behavior_graph.successors((node_from_id, node_from_labels)):
+                transitions_to = node_trans[node_to_id]
+                place_between = PetriNet.Place(f'{node_from_id}_to_{node_to_id}')
+                self.places.add(place_between)
 
+                for transition_from in transitions_from:
+                    petri_utils.add_arc_from_to(transition_from, place_between, self)
+                for transition_to in transitions_to:
+                    petri_utils.add_arc_from_to(place_between, transition_to, self)
             # Each activity that can end the trace have to be connected through an AND-join to the ending invisible transition
-            if not next(behavior_graph.successors(node_from), None):
-                place_to_sink = PetriNet.Place(str(id(node_from)) + '_to_sink')
-                for transition in node_trans[id(node_from)]:
-                    self.places.add(place_to_sink)
-                    petri_utils.add_arc_from_to(transition, place_to_sink, self)
+            if not list(behavior_graph.successors((node_from_id, node_from_labels))):
+                place_to_sink = PetriNet.Place(f'{node_from_id}_to_sink')
+                self.places.add(place_to_sink)
                 petri_utils.add_arc_from_to(place_to_sink, sink_trans, self)
-
+                for transition in transitions_from:
+                    petri_utils.add_arc_from_to(transition, place_to_sink, self)
         # Initial and final markings are just one token in the source place and one token in the sink place, respectively
         self.initial_marking = Marking({source_place: 1})
         self.final_marking = Marking({sink_place: 1})
+
 
     def __set_initial_marking(self, initial_marking):
         self.__initial_marking = initial_marking

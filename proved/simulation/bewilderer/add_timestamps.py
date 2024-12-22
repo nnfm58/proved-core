@@ -1,7 +1,9 @@
-from random import random, sample
 from copy import copy
-from datetime import timedelta
+from datetime import timedelta, datetime
+from random import random, sample
+from warnings import warn
 
+from pm4py.objects.log.obj import Trace
 from pm4py.objects.log.util.xes import DEFAULT_TIMESTAMP_KEY
 
 from proved.xes_keys import DEFAULT_U_TIMESTAMP_MIN_KEY, DEFAULT_U_TIMESTAMP_MAX_KEY
@@ -115,3 +117,58 @@ def add_uncertain_timestamp_to_trace_montecarlo(trace, p_left, p_right, max_over
                     trace[i][u_timestamp_max_key] = copy(max(trace[i][u_timestamp_max_key], trace[i + steps_right][timestamp_key]))
                 else:
                     trace[i][u_timestamp_max_key] = copy(max(trace[i][timestamp_key], trace[i + steps_right][timestamp_key]))
+
+
+
+def str_to_datetime(timestamp):
+    """Helper function to convert string to datetime if necessary"""
+    if isinstance(timestamp, str):
+        return datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
+    return timestamp
+
+def add_uncertain_timestamp_to_trace(
+        p: float,
+        trace: Trace, 
+        timestamp_key: str = DEFAULT_TIMESTAMP_KEY, 
+        u_timestamp_min_key: str = DEFAULT_U_TIMESTAMP_MIN_KEY,
+        u_timestamp_max_key: str = DEFAULT_U_TIMESTAMP_MAX_KEY):
+    """
+    Adds timestamp uncertainty to events in a trace with a certain probability.
+    Handles both string and datetime formats for timestamps.
+    
+    :param trace: The trace (list of events)
+    :param p: The probability of modifying timestamps with uncertainty
+    :param timestamp_key: The key for the event's timestamp
+    :param u_timestamp_min_key: The key for the minimum value of an uncertain timestamp
+    :param u_timestamp_max_key: The key for the maximum value of an uncertain timestamp
+    :raises ValueError: if p is not in the range [0, 1]
+    :return:
+    """
+    if not 0 <= p <= 1:
+        raise ValueError('Probability p must be between 0 and 1.')
+    
+    if p > 0.0:
+        available_indices = [i for i in range(len(trace)) if u_timestamp_min_key not in trace[i] and u_timestamp_max_key not in trace[i]]
+        num_events_to_modify = max(1, round(len(available_indices) * p))
+        
+        # Check if there are fewer available events than needed
+        if len(available_indices) < num_events_to_modify:
+            warn(f"Cannot modify exactly {p*100}% of the available events. Only {len(available_indices)} events available for modification.")
+            indices_to_alter = available_indices  # Modify all available events
+        else:
+            indices_to_alter = sample(available_indices, num_events_to_modify)
+
+        # Alter selected events by adding uncertainty in timestamp
+        for i in indices_to_alter:
+            event = trace[i]
+            event_timestamp = str_to_datetime(event[timestamp_key])  # Convert if necessary
+            
+            # If the event is the first in the trace, alter the timestamp to overlap the following event
+            # If the event is the last, overlap with the previous event
+            # Otherwise, randomly overlap with the previous or next event
+            if i == 0 or (i != len(trace) - 1 and random() < 0.5):
+                event[u_timestamp_min_key] = copy(event_timestamp) - timedelta(milliseconds=100)
+                event[u_timestamp_max_key] = copy(max(event_timestamp, str_to_datetime(trace[min(i + 1, len(trace) - 1)][timestamp_key]))) + timedelta(milliseconds=100)
+            else:
+                event[u_timestamp_min_key] = copy(min(event_timestamp, str_to_datetime(trace[max(i - 1, 0)][timestamp_key]))) - timedelta(milliseconds=100)
+                event[u_timestamp_max_key] = copy(event_timestamp) + timedelta(milliseconds=100)

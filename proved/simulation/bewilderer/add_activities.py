@@ -1,5 +1,8 @@
-from random import random, sample
 
+from random import random, sample, uniform
+from warnings import warn
+
+from pm4py.objects.log.obj import Trace
 from pm4py.objects.log.util.xes import DEFAULT_NAME_KEY
 
 from proved.xes_keys import DEFAULT_U_NAME_KEY
@@ -104,3 +107,65 @@ def add_uncertain_activities_to_trace_montecarlo(trace, p, max_labels=0, label_s
                     event[u_activity_key]['children'] = {activity_label: 0 for activity_label in [event[activity_key]] + sample(label_set - {event[activity_key]}, to_add)}
                 else:
                     event[u_activity_key]['children'].update({activity_label: 0 for activity_label in [event[activity_key]] + sample(label_set - {event[activity_key]}, to_add)})
+
+
+def add_uncertain_activities_to_trace(p: float, 
+        trace: Trace,  
+        max_labels_to_add:int =1, label_set=None, 
+        activity_key:str= DEFAULT_NAME_KEY,                                       u_activity_key:str=DEFAULT_U_NAME_KEY,
+        add_probability_values: bool = True,
+        ):
+    
+    """
+    Adds uncertain activity labels to exactly p percent of the events in the trace,
+    ensuring that uncertainty is not added more than once to the same event.
+   
+    :param trace: The trace (list of events)
+    :param p: Probability (percentage) of events to modify
+    :param max_labels_to_add: Maximum number of uncertain activity labels to add
+    :param label_set: Set of possible activity labels to choose from
+    :param activity_key: Key for the activity label in the trace events
+    :param u_activity_key: Key for the uncertain activity in the trace events
+    :param add_probability_values: If True, assigns random probabilities; otherwise, assigns equal probabilities
+    :return: None (modifies the trace in place)
+    """
+
+    if not 0<= p <=1:
+        raise ValueError('Probability p must be between 0 and 1.')
+
+    if p > 0.0:
+        if label_set is None:
+            label_set = set(event[activity_key] for event in trace)
+        
+        labels_to_add = min(max_labels_to_add, len(label_set) - 1)
+
+        # Filter out events that already have uncertain activity labels
+        available_events = [event for event in trace if u_activity_key not in event]
+    
+        # Determine the exact number of events to modify based on p
+        num_events_to_modify = (round(len(trace) * p))
+
+        # Ensure we only sample from available events that haven't been modified yet
+        # If there are fewer available events than the number to be modified
+        if len(available_events) < num_events_to_modify:
+            # Warn the user if fewer than p% of events can be modified
+            warn(f"Cannot modify exactly {p*100}% of the events. Only {len(available_events)} events available for modification.")
+            events_to_modify = available_events
+        else:
+            # Otherwise, sample exactly the number of events needed
+            events_to_modify = sample(available_events, num_events_to_modify)  
+  
+    
+        for event in events_to_modify:          
+            event[u_activity_key] = dict()
+            current_activity_label = event[activity_key]
+            additional_labels = sample(list(label_set - {current_activity_label}), labels_to_add)                         
+            # Assign probabilities
+            if add_probability_values:
+                uniform_probs = [uniform(0.0001, 0.9999) for _ in range(labels_to_add + 1)]
+                normalized_probs = [prob / sum(uniform_probs) for prob in uniform_probs]
+            else:
+                normalized_probs = [1 / (labels_to_add + 1)] * (labels_to_add + 1)
+            # Assign the uncertain activity labels with probabilities
+            children_dict = {label: prob for label, prob in zip([current_activity_label] + additional_labels, normalized_probs)}
+            event[u_activity_key]['children'] = children_dict
